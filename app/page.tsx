@@ -20,54 +20,39 @@ import {
 } from "lucide-react"
 
 interface Account {
+  id: string
   email: string
   password: string
-  sessionToken?: string
-  gems?: number
-  timestamp: string
-  status: "success" | "failed"
-  error?: string
+  balance: number
+  status: "active" | "inactive" | "pending"
+  createdAt: string
 }
 
-interface ApiResponse<T = unknown> {
-  success?: boolean
-  error?: string
-  connected?: boolean
-  data?: T
-}
-
-interface AccountsResponse {
-  accounts: Account[]
-  stats: {
-    successful: number
-    failed: number
-    total: number
-  }
-}
-
-interface BalanceResponse {
-  gems: number
-  increased?: boolean
-  diff?: number
-  error?: string
-}
-
-interface GenerateResponse {
-  success: boolean
-  account?: Account
-  error?: string
+// Renamed interface to avoid conflict with lucide-react Settings icon
+interface AppSettings {
+  apiEndpoint: string
+  sessionToken: string
+  autoRefresh: boolean
+  refreshInterval: number
 }
 
 const api = {
-  baseUrl: "/api/proxy",
+  sessionId: typeof window !== "undefined" ? `session-${Date.now()}-${Math.random().toString(36).slice(2)}` : "default",
+
+  getHeaders() {
+    return {
+      "Content-Type": "application/json",
+      "x-session-id": this.sessionId,
+    }
+  },
 
   async health(): Promise<{ status: string; connected: boolean }> {
     try {
-      const res = await fetch(`${this.baseUrl}/health`, {
+      const res = await fetch("/api/health", {
         cache: "no-store",
         signal: AbortSignal.timeout(5000),
       })
-      if (!res.ok) throw new Error("Backend unavailable")
+      if (!res.ok) throw new Error("API unavailable")
       const data = await res.json()
       return { status: data.status, connected: true }
     } catch {
@@ -75,59 +60,65 @@ const api = {
     }
   },
 
-  async getAccounts(): Promise<AccountsResponse> {
-    const res = await fetch(`${this.baseUrl}/accounts`, { cache: "no-store" })
+  async getAccounts(): Promise<{ success: boolean; accounts: Account[]; count: number }> {
+    const res = await fetch("/api/accounts", {
+      cache: "no-store",
+      headers: this.getHeaders(),
+    })
     return res.json()
   },
 
-  async getSettings(): Promise<{ main_session_token: string; local_id: string; total_gems: number }> {
-    const res = await fetch(`${this.baseUrl}/settings`, { cache: "no-store" })
+  async getSettings(): Promise<{ success: boolean; settings: AppSettings }> {
+    const res = await fetch("/api/settings", {
+      cache: "no-store",
+      headers: this.getHeaders(),
+    })
     return res.json()
   },
 
-  async updateSettings(settings: { main_session_token?: string; local_id?: string }): Promise<ApiResponse> {
-    const res = await fetch(`${this.baseUrl}/settings`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
+  async updateSettings(settings: Partial<AppSettings>): Promise<{ success: boolean; settings: AppSettings }> {
+    const res = await fetch("/api/settings", {
+      method: "PUT",
+      headers: this.getHeaders(),
       body: JSON.stringify(settings),
     })
     return res.json()
   },
 
-  async generateAccount(): Promise<GenerateResponse> {
-    const res = await fetch(`${this.baseUrl}/generate`, {
+  async generateAccount(): Promise<{ success: boolean; account?: Account; error?: string; totalAccounts?: number }> {
+    const res = await fetch("/api/accounts", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: this.getHeaders(),
     })
     return res.json()
   },
 
-  async getBalance(): Promise<BalanceResponse> {
-    const res = await fetch(`${this.baseUrl}/balance`, { cache: "no-store" })
+  async getBalance(): Promise<{ success: boolean; balance: number; error?: string }> {
+    const res = await fetch("/api/balance", {
+      cache: "no-store",
+      headers: this.getHeaders(),
+    })
     return res.json()
   },
 
-  async exportAccounts(): Promise<{ content: string; count: number }> {
-    const res = await fetch(`${this.baseUrl}/export`, { cache: "no-store" })
-    return res.json()
+  async exportAccounts(format: "json" | "csv" | "txt" = "txt"): Promise<Response> {
+    return fetch(`/api/export?format=${format}`, {
+      cache: "no-store",
+      headers: this.getHeaders(),
+    })
   },
 
-  async clearAccounts(): Promise<ApiResponse> {
-    const res = await fetch(`${this.baseUrl}/clear`, {
-      method: "POST",
+  async clearAccounts(): Promise<{ success: boolean; message: string }> {
+    const res = await fetch("/api/accounts", {
+      method: "DELETE",
+      headers: this.getHeaders(),
     })
     return res.json()
   },
 }
 
-function generateRandomEmail() {
-  const randomNum = Math.floor(Math.random() * 9000000) + 100000
-  return `test${randomNum}@example.com`
-}
-
-function getTimestamp() {
-  return new Date().toLocaleTimeString("en-US", { hour12: false })
-}
+// Keep HoneyModal exactly as is
+type ModalPhase = "unmounted" | "mounting" | "entering" | "visible" | "exiting" | "unmounting"
 
 interface ModalProps {
   isOpen: boolean
@@ -136,8 +127,6 @@ interface ModalProps {
   title: string
   icon?: React.ReactNode
 }
-
-type ModalPhase = "unmounted" | "mounting" | "entering" | "visible" | "exiting" | "unmounting"
 
 function HoneyModal({ isOpen, onClose, children, title, icon }: ModalProps) {
   const [phase, setPhase] = useState<ModalPhase>("unmounted")
@@ -149,14 +138,12 @@ function HoneyModal({ isOpen, onClose, children, title, icon }: ModalProps) {
   const frameRef = useRef<number>(0)
   const startTimeRef = useRef<number>(0)
 
-  // Smooth morphing animation using RAF
   useEffect(() => {
     if (phase === "entering" || phase === "visible") {
       startTimeRef.current = performance.now()
       const animate = (time: number) => {
         const elapsed = time - startTimeRef.current
         const progress = Math.min(elapsed / 600, 1)
-        // Elastic easing for honey-like viscous feel
         const elastic =
           progress < 1 ? 1 - Math.pow(2, -10 * progress) * Math.cos((progress * 10 - 0.75) * ((2 * Math.PI) / 3)) : 1
         setMorphProgress(elastic)
@@ -171,7 +158,7 @@ function HoneyModal({ isOpen, onClose, children, title, icon }: ModalProps) {
       const animate = (time: number) => {
         const elapsed = time - startTimeRef.current
         const progress = Math.min(elapsed / 400, 1)
-        setMorphProgress(1 - progress * progress) // Quadratic ease out
+        setMorphProgress(1 - progress * progress)
         if (progress < 1) {
           frameRef.current = requestAnimationFrame(animate)
         }
@@ -181,11 +168,9 @@ function HoneyModal({ isOpen, onClose, children, title, icon }: ModalProps) {
     }
   }, [phase])
 
-  // Zero-flicker state machine using useLayoutEffect
   useLayoutEffect(() => {
     if (isOpen && phase === "unmounted") {
       setPhase("mounting")
-      // Force a reflow before transitioning
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
           setPhase("entering")
@@ -201,7 +186,6 @@ function HoneyModal({ isOpen, onClose, children, title, icon }: ModalProps) {
     }
   }, [isOpen, phase])
 
-  // Smooth mouse tracking with interpolation
   useEffect(() => {
     if (phase === "unmounted" || phase === "unmounting") return
 
@@ -235,7 +219,6 @@ function HoneyModal({ isOpen, onClose, children, title, icon }: ModalProps) {
     }
   }, [phase])
 
-  // Click ripple effect on backdrop
   const handleBackdropClick = useCallback(
     (e: React.MouseEvent) => {
       if (e.target === backdropRef.current) {
@@ -253,7 +236,6 @@ function HoneyModal({ isOpen, onClose, children, title, icon }: ModalProps) {
     [onClose],
   )
 
-  // Escape key handling
   useEffect(() => {
     const handleEscape = (e: KeyboardEvent) => {
       if (e.key === "Escape" && isOpen) onClose()
@@ -279,7 +261,6 @@ function HoneyModal({ isOpen, onClose, children, title, icon }: ModalProps) {
       aria-modal="true"
       aria-labelledby="modal-title"
     >
-      {/* Morphing backdrop with liquid dissolve */}
       <div
         ref={backdropRef}
         onClick={handleBackdropClick}
@@ -297,7 +278,6 @@ function HoneyModal({ isOpen, onClose, children, title, icon }: ModalProps) {
         }}
       />
 
-      {/* Click ripple effects */}
       {clickRipples.map((ripple) => (
         <div
           key={ripple.id}
@@ -315,7 +295,6 @@ function HoneyModal({ isOpen, onClose, children, title, icon }: ModalProps) {
         />
       ))}
 
-      {/* Floating aurora particles */}
       <div className="absolute inset-0 pointer-events-none overflow-hidden">
         {[...Array(8)].map((_, i) => (
           <div
@@ -335,7 +314,6 @@ function HoneyModal({ isOpen, onClose, children, title, icon }: ModalProps) {
         ))}
       </div>
 
-      {/* Modal container with 3D morphing */}
       <div
         ref={modalRef}
         className="relative w-full max-w-xl"
@@ -345,7 +323,6 @@ function HoneyModal({ isOpen, onClose, children, title, icon }: ModalProps) {
           willChange: "transform",
         }}
       >
-        {/* Animated outer glow with rotation */}
         <div
           className="absolute -inset-12 rounded-[56px]"
           style={{
@@ -362,7 +339,6 @@ function HoneyModal({ isOpen, onClose, children, title, icon }: ModalProps) {
           }}
         />
 
-        {/* Liquid border animation */}
         <div
           className="absolute -inset-[2px] rounded-[28px] overflow-hidden"
           style={{
@@ -384,7 +360,6 @@ function HoneyModal({ isOpen, onClose, children, title, icon }: ModalProps) {
           />
         </div>
 
-        {/* Main modal with honey morphing */}
         <div
           className="relative rounded-[26px] overflow-hidden"
           style={{
@@ -409,7 +384,6 @@ function HoneyModal({ isOpen, onClose, children, title, icon }: ModalProps) {
             transition: "box-shadow 0.3s ease-out",
           }}
         >
-          {/* Internal shimmer layer */}
           <div
             className="absolute inset-0 pointer-events-none"
             style={{
@@ -421,7 +395,6 @@ function HoneyModal({ isOpen, onClose, children, title, icon }: ModalProps) {
             }}
           />
 
-          {/* Header with elastic entrance */}
           <div
             className="relative flex items-center justify-between p-6"
             style={{
@@ -471,7 +444,6 @@ function HoneyModal({ isOpen, onClose, children, title, icon }: ModalProps) {
             </button>
           </div>
 
-          {/* Content with wave entrance */}
           <div
             className="relative p-6"
             style={{
@@ -480,7 +452,6 @@ function HoneyModal({ isOpen, onClose, children, title, icon }: ModalProps) {
               transition: "transform 0.6s cubic-bezier(0.34, 1.56, 0.64, 1) 0.1s, opacity 0.4s 0.1s",
             }}
           >
-            {/* Interactive spotlight */}
             <div
               className="absolute inset-0 pointer-events-none"
               style={{
@@ -495,7 +466,6 @@ function HoneyModal({ isOpen, onClose, children, title, icon }: ModalProps) {
         </div>
       </div>
 
-      {/* Modal-specific keyframes */}
       <style jsx>{`
         @keyframes ripple-expand {
           0% {
@@ -551,7 +521,6 @@ function WaveInput({ label, value, onChange, placeholder, hint }: WaveInputProps
         {label}
       </label>
       <div className="relative">
-        {/* Animated magnetic border */}
         <div
           className="absolute -inset-[1px] rounded-xl overflow-hidden transition-all duration-500"
           style={{
@@ -584,7 +553,6 @@ function WaveInput({ label, value, onChange, placeholder, hint }: WaveInputProps
               : "inset 0 1px 0 rgba(255, 255, 255, 0.02)",
           }}
         />
-        {/* Focus spotlight */}
         {isFocused && (
           <div
             className="absolute inset-0 rounded-xl pointer-events-none"
@@ -635,6 +603,7 @@ function LiquidButton({ onClick, children, variant = "primary", disabled = false
     <button
       ref={buttonRef}
       onClick={onClick}
+      disabled={disabled}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => {
         setIsHovered(false)
@@ -664,7 +633,6 @@ function LiquidButton({ onClick, children, variant = "primary", disabled = false
         transition: "all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1)",
       }}
     >
-      {/* Magnetic spotlight */}
       <div
         className="absolute inset-0 transition-opacity duration-300 pointer-events-none"
         style={{
@@ -673,7 +641,6 @@ function LiquidButton({ onClick, children, variant = "primary", disabled = false
             transparent 60%)`,
         }}
       />
-      {/* Shimmer sweep */}
       <div
         className="absolute inset-0 pointer-events-none"
         style={{
@@ -682,7 +649,6 @@ function LiquidButton({ onClick, children, variant = "primary", disabled = false
           transition: "transform 0.7s ease-out",
         }}
       />
-      {/* 3D highlight edge */}
       <div
         className="absolute inset-x-0 top-0 h-px pointer-events-none"
         style={{
@@ -697,9 +663,8 @@ function LiquidButton({ onClick, children, variant = "primary", disabled = false
 export default function GemDashboard() {
   const [accounts, setAccounts] = useState<Account[]>([])
   const [isGenerating, setIsGenerating] = useState(false)
-  const [mainSessionToken, setMainSessionToken] = useState("")
-  const [localId, setLocalId] = useState("")
-  const [totalGems, setTotalGems] = useState(0)
+  const [sessionToken, setSessionToken] = useState("")
+  const [totalBalance, setTotalBalance] = useState(0)
   const [showSettings, setShowSettings] = useState(false)
   const [generationCount, setGenerationCount] = useState(0)
   const [animatingGems, setAnimatingGems] = useState<{ id: number; amount: number }[]>([])
@@ -708,6 +673,7 @@ export default function GemDashboard() {
   const [isConnected, setIsConnected] = useState(false)
   const [isCheckingConnection, setIsCheckingConnection] = useState(true)
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const previousBalanceRef = useRef(0)
 
   const blobsRef = useRef<Array<{
     x: number
@@ -727,47 +693,51 @@ export default function GemDashboard() {
 
       if (health.connected) {
         try {
-          // Load accounts and settings from backend
           const [accountsRes, settingsRes] = await Promise.all([api.getAccounts(), api.getSettings()])
 
           setAccounts(accountsRes.accounts || [])
-          setGenerationCount(accountsRes.stats?.total || 0)
-          setMainSessionToken(settingsRes.main_session_token || "")
-          setLocalId(settingsRes.local_id || "")
-          setTotalGems(settingsRes.total_gems || 0)
+          setGenerationCount(accountsRes.count || 0)
+          setSessionToken(settingsRes.settings?.sessionToken || "")
+
+          // Calculate total balance from accounts
+          const total = (accountsRes.accounts || []).reduce((sum, acc) => sum + acc.balance, 0)
+          setTotalBalance(total)
+          previousBalanceRef.current = total
         } catch (error) {
-          console.error("[v0] Failed to load initial data:", error)
+          console.error("Failed to load initial data:", error)
         }
       }
       setIsCheckingConnection(false)
     }
 
     checkConnection()
-    // Re-check connection every 30 seconds
     const interval = setInterval(checkConnection, 30000)
     return () => clearInterval(interval)
   }, [])
 
   useEffect(() => {
-    if (!isConnected || !mainSessionToken) return
+    if (!isConnected || !sessionToken) return
 
     const pollBalance = async () => {
       try {
         const balanceRes = await api.getBalance()
-        if (balanceRes.increased && balanceRes.diff) {
-          triggerGemAnimation(balanceRes.diff)
+        if (balanceRes.success && balanceRes.balance > previousBalanceRef.current) {
+          const diff = balanceRes.balance - previousBalanceRef.current
+          triggerGemAnimation(diff)
         }
-        setTotalGems(balanceRes.gems)
+        setTotalBalance(balanceRes.balance)
+        previousBalanceRef.current = balanceRes.balance
       } catch (error) {
-        console.error("[v0] Balance poll failed:", error)
+        console.error("Balance poll failed:", error)
       }
     }
 
     pollBalance()
     const interval = setInterval(pollBalance, 10000)
     return () => clearInterval(interval)
-  }, [isConnected, mainSessionToken])
+  }, [isConnected, sessionToken])
 
+  // Canvas background effect (unchanged)
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
@@ -775,7 +745,6 @@ export default function GemDashboard() {
     const ctx = canvas.getContext("2d", { alpha: false })
     if (!ctx) return
 
-    // High DPI support
     const dpr = window.devicePixelRatio || 1
     const updateCanvasSize = () => {
       canvas.width = window.innerWidth * dpr
@@ -794,7 +763,6 @@ export default function GemDashboard() {
       { r: 220, g: 200, b: 255, a: 0.04 },
     ]
 
-    // Initialize blobs only once
     if (!blobsRef.current) {
       blobsRef.current = Array.from({ length: 5 }, (_, i) => ({
         x: Math.random() * window.innerWidth,
@@ -816,16 +784,13 @@ export default function GemDashboard() {
     const animate = () => {
       time += 0.002
 
-      // Smooth mouse interpolation
       currentMousePos.x += (targetMousePos.x - currentMousePos.x) * 0.03
       currentMousePos.y += (targetMousePos.y - currentMousePos.y) * 0.03
 
-      // Clear with solid color (no alpha)
       ctx.fillStyle = "#0c0c12"
       ctx.fillRect(0, 0, window.innerWidth, window.innerHeight)
 
       blobs.forEach((blob) => {
-        // Subtle mouse repulsion
         const dx = currentMousePos.x - blob.x
         const dy = currentMousePos.y - blob.y
         const dist = Math.sqrt(dx * dx + dy * dy)
@@ -853,7 +818,6 @@ export default function GemDashboard() {
         blob.x += blob.vx
         blob.y += blob.vy
 
-        // Wrap around edges
         const w = window.innerWidth
         const h = window.innerHeight
         if (blob.x < -currentRadius) blob.x = w + currentRadius
@@ -885,7 +849,6 @@ export default function GemDashboard() {
     }
   }, [])
 
-  // Update mouse position for other components
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
       setMousePos({ x: e.clientX, y: e.clientY })
@@ -904,33 +867,31 @@ export default function GemDashboard() {
 
   const generateAccount = async () => {
     if (!isConnected) {
-      setStatusMessage("Backend not connected. Start Flask server first.")
+      setStatusMessage("API not connected. Please wait...")
       setTimeout(() => setStatusMessage(""), 3000)
       return
     }
 
     setIsGenerating(true)
-    setStatusMessage("Generating account via backend...")
+    setStatusMessage("Generating account...")
 
     try {
       const result = await api.generateAccount()
 
       if (result.success && result.account) {
         setAccounts((prev) => [result.account!, ...prev])
-        setGenerationCount((prev) => prev + 1)
-        setStatusMessage(`Generated ${result.account.email} with ${result.account.gems || 0} gems`)
-        if (result.account.gems) {
-          triggerGemAnimation(result.account.gems)
+        setGenerationCount(result.totalAccounts || generationCount + 1)
+        setStatusMessage(`Generated ${result.account.email} with ${result.account.balance} balance`)
+        if (result.account.balance > 0) {
+          triggerGemAnimation(result.account.balance)
+          setTotalBalance((prev) => prev + result.account!.balance)
         }
       } else {
-        if (result.account) {
-          setAccounts((prev) => [result.account!, ...prev])
-        }
         setStatusMessage(`Generation failed: ${result.error || "Unknown error"}`)
       }
     } catch (error) {
-      console.error("[v0] Generate account error:", error)
-      setStatusMessage("Failed to connect to backend")
+      console.error("Generate account error:", error)
+      setStatusMessage("Failed to generate account")
     }
 
     setIsGenerating(false)
@@ -939,19 +900,16 @@ export default function GemDashboard() {
 
   const saveSettings = async () => {
     if (!isConnected) {
-      setStatusMessage("Backend not connected")
+      setStatusMessage("API not connected")
       setTimeout(() => setStatusMessage(""), 3000)
       return
     }
 
     try {
-      await api.updateSettings({
-        main_session_token: mainSessionToken,
-        local_id: localId,
-      })
-      setStatusMessage("Settings saved to backend")
+      await api.updateSettings({ sessionToken })
+      setStatusMessage("Settings saved")
     } catch (error) {
-      console.error("[v0] Save settings error:", error)
+      console.error("Save settings error:", error)
       setStatusMessage("Failed to save settings")
     }
 
@@ -961,25 +919,10 @@ export default function GemDashboard() {
 
   const downloadAccounts = async () => {
     try {
-      if (isConnected) {
-        const result = await api.exportAccounts()
-        const blob = new Blob([result.content], { type: "text/plain" })
-        const url = URL.createObjectURL(blob)
-        const a = document.createElement("a")
-        a.href = url
-        a.download = `accounts_${Date.now()}.txt`
-        a.click()
-        URL.revokeObjectURL(url)
-      } else {
-        // Fallback to local export
-        const successAccounts = accounts.filter((a) => a.status === "success")
-        const content = successAccounts
-          .map(
-            (acc) =>
-              `Email: ${acc.email}\nPassword: ${acc.password}\nSession Token: ${acc.sessionToken || "N/A"}\nGems: ${acc.gems || 0}\n---`,
-          )
-          .join("\n")
+      const response = await api.exportAccounts("txt")
 
+      if (response.headers.get("content-type")?.includes("text/plain")) {
+        const content = await response.text()
         const blob = new Blob([content], { type: "text/plain" })
         const url = URL.createObjectURL(blob)
         const a = document.createElement("a")
@@ -987,28 +930,41 @@ export default function GemDashboard() {
         a.download = `accounts_${Date.now()}.txt`
         a.click()
         URL.revokeObjectURL(url)
+      } else {
+        const data = await response.json()
+        if (data.error) {
+          setStatusMessage(data.error)
+          setTimeout(() => setStatusMessage(""), 3000)
+        }
       }
     } catch (error) {
-      console.error("[v0] Export error:", error)
+      console.error("Export error:", error)
+      setStatusMessage("Failed to export accounts")
+      setTimeout(() => setStatusMessage(""), 3000)
     }
   }
 
   const clearAccounts = async () => {
     try {
-      if (isConnected) {
-        await api.clearAccounts()
-      }
+      await api.clearAccounts()
       setAccounts([])
       setGenerationCount(0)
+      setTotalBalance(0)
+      previousBalanceRef.current = 0
+      setStatusMessage("All accounts cleared")
+      setTimeout(() => setStatusMessage(""), 3000)
     } catch (error) {
-      console.error("[v0] Clear accounts error:", error)
+      console.error("Clear accounts error:", error)
+      setStatusMessage("Failed to clear accounts")
+      setTimeout(() => setStatusMessage(""), 3000)
     }
   }
 
   const stats = useMemo(
     () => ({
-      successful: accounts.filter((a) => a.status === "success").length,
-      failed: accounts.filter((a) => a.status === "failed").length,
+      active: accounts.filter((a) => a.status === "active").length,
+      inactive: accounts.filter((a) => a.status === "inactive").length,
+      pending: accounts.filter((a) => a.status === "pending").length,
       total: generationCount,
     }),
     [accounts, generationCount],
@@ -1016,10 +972,8 @@ export default function GemDashboard() {
 
   return (
     <div className="min-h-screen relative overflow-hidden" style={{ background: "#0c0c12" }}>
-      {/* GPU-accelerated canvas background */}
       <canvas ref={canvasRef} className="absolute inset-0 pointer-events-none" style={{ willChange: "auto" }} />
 
-      {/* Floating gem animations */}
       {animatingGems.map((gem) => (
         <div
           key={gem.id}
@@ -1077,309 +1031,242 @@ export default function GemDashboard() {
               </h1>
               <div className="flex items-center gap-2">
                 {isCheckingConnection ? (
-                  <span className="text-pink-200/50 text-sm font-medium flex items-center gap-2">
-                    <RefreshCw size={14} className="animate-spin" />
-                    Connecting...
-                  </span>
+                  <RefreshCw size={14} className="text-pink-200/50 animate-spin" />
                 ) : isConnected ? (
-                  <span className="text-emerald-400 text-sm font-medium flex items-center gap-2">
-                    <Wifi size={14} />
-                    Connected to Flask Backend
-                  </span>
+                  <Wifi size={14} className="text-green-400" />
                 ) : (
-                  <span className="text-amber-400 text-sm font-medium flex items-center gap-2">
-                    <WifiOff size={14} />
-                    Backend Offline
-                  </span>
+                  <WifiOff size={14} className="text-red-400" />
                 )}
+                <span className="text-pink-200/50 text-sm">
+                  {isCheckingConnection ? "Checking..." : isConnected ? "Connected" : "Disconnected"}
+                </span>
               </div>
             </div>
           </div>
 
-          <div className="flex items-center gap-3">
-            {isConnected && mainSessionToken && (
-              <div
-                className="relative backdrop-blur-xl px-4 py-2 rounded-2xl transition-all duration-500"
-                style={{
-                  background: "rgba(30, 30, 40, 0.4)",
-                  border: "1px solid rgba(255, 200, 221, 0.15)",
-                }}
-              >
-                <span className="text-pink-200 font-bold flex items-center gap-2">
-                  <Gem size={18} />
-                  {totalGems.toLocaleString()}
+          <div className="flex items-center gap-4">
+            <div
+              className="relative backdrop-blur-xl px-6 py-3 rounded-2xl transition-all duration-500"
+              style={{
+                background: "rgba(255, 200, 221, 0.08)",
+                border: "1px solid rgba(255, 200, 221, 0.15)",
+              }}
+            >
+              <div className="flex items-center gap-3">
+                <Gem className="text-pink-200" size={24} />
+                <span
+                  className="text-3xl font-black"
+                  style={{
+                    background: "linear-gradient(135deg, #ffc8dd 0%, #e6d5f5 100%)",
+                    WebkitBackgroundClip: "text",
+                    WebkitTextFillColor: "transparent",
+                  }}
+                >
+                  {totalBalance.toLocaleString()}
                 </span>
               </div>
-            )}
-
+            </div>
             <button
               onClick={() => setShowSettings(true)}
-              className="relative transition-all duration-500 hover:scale-105 group"
+              className="relative backdrop-blur-xl p-4 rounded-2xl transition-all duration-500 hover:scale-110 group"
+              style={{
+                background: "rgba(255, 200, 221, 0.05)",
+                border: "1px solid rgba(255, 200, 221, 0.15)",
+              }}
             >
-              <div
-                className="absolute inset-0 rounded-2xl blur-xl transition-all duration-700 group-hover:blur-2xl"
-                style={{ background: "rgba(255, 200, 221, 0.1)" }}
+              <Settings
+                className="text-pink-200/70 group-hover:text-pink-200 transition-all duration-300 group-hover:rotate-90"
+                size={24}
               />
-              <div
-                className="relative backdrop-blur-xl p-3 rounded-2xl transition-all duration-500"
-                style={{
-                  background: "rgba(30, 30, 40, 0.4)",
-                  border: "1px solid rgba(255, 200, 221, 0.15)",
-                }}
-              >
-                <Settings className="text-pink-200 transition-transform duration-500 group-hover:rotate-90" size={24} />
-              </div>
             </button>
           </div>
         </div>
 
-        {!isConnected && !isCheckingConnection && (
+        {/* Status Message */}
+        {statusMessage && (
           <div
-            className="mb-6 p-4 rounded-2xl flex items-start gap-3 animate-fade-in"
+            className="mb-6 p-4 rounded-2xl backdrop-blur-xl animate-fade-in"
             style={{
-              background: "rgba(251, 191, 36, 0.1)",
-              border: "1px solid rgba(251, 191, 36, 0.2)",
+              background: "rgba(255, 200, 221, 0.1)",
+              border: "1px solid rgba(255, 200, 221, 0.2)",
             }}
           >
-            <AlertCircle className="text-amber-400 flex-shrink-0 mt-0.5" size={20} />
-            <div>
-              <p className="text-amber-200 text-sm font-medium">Flask Backend Required</p>
-              <p className="text-amber-200/60 text-xs mt-1">
-                Start the Flask server to enable account generation:{" "}
-                <code className="bg-amber-500/20 px-1.5 py-0.5 rounded">python scripts/flask_server.py</code>
-              </p>
+            <div className="flex items-center gap-3">
+              <AlertCircle className="text-pink-200" size={20} />
+              <span className="text-pink-200">{statusMessage}</span>
             </div>
           </div>
         )}
 
-        {/* Settings Modal */}
-        <HoneyModal
-          isOpen={showSettings}
-          onClose={() => setShowSettings(false)}
-          title="Configuration"
-          icon={<Settings className="text-pink-300" size={24} />}
-        >
-          <div className="space-y-5">
-            <WaveInput
-              label="Main Account Session Token"
-              value={mainSessionToken}
-              onChange={setMainSessionToken}
-              placeholder="Enter your session token..."
-              hint="Used to poll gem balance from main account"
-            />
+        {/* Stats Grid */}
+        <div className="grid grid-cols-4 gap-6 mb-10">
+          {[
+            { label: "Total Generated", value: stats.total, icon: Clock },
+            { label: "Active", value: stats.active, icon: CheckCircle },
+            { label: "Inactive", value: stats.inactive, icon: XCircle },
+            { label: "Pending", value: stats.pending, icon: RefreshCw },
+          ].map((stat, i) => (
+            <div
+              key={stat.label}
+              className="relative backdrop-blur-xl p-6 rounded-3xl transition-all duration-500 hover:scale-105 group"
+              style={{
+                background: "rgba(255, 200, 221, 0.03)",
+                border: "1px solid rgba(255, 200, 221, 0.1)",
+                animationDelay: `${i * 100}ms`,
+              }}
+            >
+              <div className="flex items-center gap-4">
+                <div
+                  className="p-3 rounded-2xl transition-all duration-500 group-hover:scale-110"
+                  style={{ background: "rgba(255, 200, 221, 0.1)" }}
+                >
+                  <stat.icon className="text-pink-200" size={24} />
+                </div>
+                <div>
+                  <p className="text-pink-200/50 text-sm">{stat.label}</p>
+                  <p
+                    className="text-3xl font-black"
+                    style={{
+                      background: "linear-gradient(135deg, #ffc8dd 0%, #e6d5f5 100%)",
+                      WebkitBackgroundClip: "text",
+                      WebkitTextFillColor: "transparent",
+                    }}
+                  >
+                    {stat.value}
+                  </p>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
 
-            <WaveInput
-              label="Local ID (Code Parameter)"
-              value={localId}
-              onChange={setLocalId}
-              placeholder="Enter the localId/code value..."
-              hint='Used as the "code" parameter in init_data requests'
-            />
-
-            <LiquidButton onClick={saveSettings} disabled={!isConnected}>
-              <CheckCircle size={18} />
-              {isConnected ? "Save Settings" : "Backend Required"}
-            </LiquidButton>
-          </div>
-        </HoneyModal>
-
-        {/* Status Message */}
-        {statusMessage && (
-          <div
-            className="mb-6 p-3 rounded-xl text-center text-sm font-medium animate-fade-in"
-            style={{
-              background: "rgba(255, 200, 221, 0.1)",
-              border: "1px solid rgba(255, 200, 221, 0.2)",
-              color: "#ffc8dd",
-            }}
-          >
-            {statusMessage}
-          </div>
-        )}
-
-        {/* Controls */}
-        <div className="flex gap-4 mb-8 animate-fade-in-delay-2">
+        {/* Action Buttons */}
+        <div className="grid grid-cols-3 gap-6 mb-10">
           <button
             onClick={generateAccount}
             disabled={isGenerating || !isConnected}
-            className="relative flex-1 transition-all duration-500 hover:scale-[1.02] disabled:opacity-50 disabled:cursor-not-allowed"
+            className="relative backdrop-blur-xl p-6 rounded-3xl transition-all duration-500 hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed group overflow-hidden"
+            style={{
+              background: "linear-gradient(135deg, rgba(255, 200, 221, 0.15) 0%, rgba(200, 180, 255, 0.1) 100%)",
+              border: "1px solid rgba(255, 200, 221, 0.25)",
+            }}
           >
-            <div
-              className="absolute inset-0 rounded-2xl blur-xl transition-all duration-700"
-              style={{ background: "rgba(255, 200, 221, 0.15)" }}
-            />
-            <div
-              className="relative backdrop-blur-xl font-bold py-4 px-6 rounded-2xl transition-all duration-500 flex items-center justify-center gap-3"
-              style={{
-                background: "rgba(255, 200, 221, 0.15)",
-                border: "1px solid rgba(255, 200, 221, 0.25)",
-                color: "#ffc8dd",
-              }}
-            >
+            <div className="relative z-10 flex items-center justify-center gap-4">
               {isGenerating ? (
-                <>
-                  <RefreshCw size={20} className="animate-spin" />
-                  <span className="font-black">Generating...</span>
-                </>
+                <RefreshCw className="text-pink-200 animate-spin" size={28} />
               ) : (
-                <>
-                  <Play size={20} fill="currentColor" />
-                  <span className="font-black">Generate Account</span>
-                </>
+                <Play className="text-pink-200" size={28} />
               )}
+              <span className="text-xl font-bold text-pink-200">
+                {isGenerating ? "Generating..." : "Generate Account"}
+              </span>
             </div>
           </button>
 
           <button
             onClick={downloadAccounts}
-            disabled={stats.successful === 0}
-            className="relative transition-all duration-500 hover:scale-105 disabled:opacity-50"
+            disabled={accounts.length === 0}
+            className="relative backdrop-blur-xl p-6 rounded-3xl transition-all duration-500 hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed group"
+            style={{
+              background: "rgba(255, 200, 221, 0.05)",
+              border: "1px solid rgba(255, 200, 221, 0.15)",
+            }}
           >
-            <div
-              className="absolute inset-0 rounded-2xl blur-xl transition-all duration-700"
-              style={{ background: "rgba(212, 232, 240, 0.1)" }}
-            />
-            <div
-              className="relative backdrop-blur-xl font-bold py-4 px-6 rounded-2xl transition-all duration-500 flex items-center gap-2"
-              style={{
-                background: "rgba(30, 30, 40, 0.4)",
-                border: "1px solid rgba(255, 200, 221, 0.15)",
-                color: "#ffc8dd",
-              }}
-            >
-              <Download size={20} />
-              <span className="font-bold">Export</span>
+            <div className="flex items-center justify-center gap-4">
+              <Download className="text-pink-200/70 group-hover:text-pink-200 transition-colors" size={28} />
+              <span className="text-xl font-bold text-pink-200/70 group-hover:text-pink-200 transition-colors">
+                Export Accounts
+              </span>
             </div>
           </button>
 
           <button
             onClick={clearAccounts}
             disabled={accounts.length === 0}
-            className="relative transition-all duration-500 hover:scale-105 disabled:opacity-50"
+            className="relative backdrop-blur-xl p-6 rounded-3xl transition-all duration-500 hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed group"
+            style={{
+              background: "rgba(255, 100, 100, 0.05)",
+              border: "1px solid rgba(255, 100, 100, 0.15)",
+            }}
           >
-            <div
-              className="absolute inset-0 rounded-2xl blur-xl transition-all duration-700"
-              style={{ background: "rgba(251, 113, 133, 0.1)" }}
-            />
-            <div
-              className="relative backdrop-blur-xl font-bold py-4 px-6 rounded-2xl transition-all duration-500 flex items-center gap-2"
-              style={{
-                background: "rgba(30, 30, 40, 0.4)",
-                border: "1px solid rgba(251, 113, 133, 0.15)",
-                color: "#fb7185",
-              }}
-            >
-              <Trash2 size={20} />
-              <span className="font-bold">Clear</span>
+            <div className="flex items-center justify-center gap-4">
+              <Trash2 className="text-red-300/70 group-hover:text-red-300 transition-colors" size={28} />
+              <span className="text-xl font-bold text-red-300/70 group-hover:text-red-300 transition-colors">
+                Clear All
+              </span>
             </div>
           </button>
         </div>
 
-        {/* Stats */}
-        <div className="grid grid-cols-3 gap-4 mb-8 animate-fade-in-delay-3">
-          <div
-            className="relative backdrop-blur-xl p-5 rounded-2xl transition-all duration-500"
-            style={{
-              background: "rgba(30, 30, 40, 0.4)",
-              border: "1px solid rgba(255, 200, 221, 0.1)",
-            }}
-          >
-            <div className="flex items-center gap-3 mb-2">
-              <CheckCircle className="text-emerald-400" size={20} />
-              <span className="text-emerald-400/80 text-sm font-medium">Successful</span>
-            </div>
-            <p className="text-3xl font-black text-emerald-400">{stats.successful}</p>
-          </div>
-
-          <div
-            className="relative backdrop-blur-xl p-5 rounded-2xl transition-all duration-500"
-            style={{
-              background: "rgba(30, 30, 40, 0.4)",
-              border: "1px solid rgba(255, 200, 221, 0.1)",
-            }}
-          >
-            <div className="flex items-center gap-3 mb-2">
-              <XCircle className="text-rose-400" size={20} />
-              <span className="text-rose-400/80 text-sm font-medium">Failed</span>
-            </div>
-            <p className="text-3xl font-black text-rose-400">{stats.failed}</p>
-          </div>
-
-          <div
-            className="relative backdrop-blur-xl p-5 rounded-2xl transition-all duration-500"
-            style={{
-              background: "rgba(30, 30, 40, 0.4)",
-              border: "1px solid rgba(255, 200, 221, 0.1)",
-            }}
-          >
-            <div className="flex items-center gap-3 mb-2">
-              <Clock className="text-pink-200" size={20} />
-              <span className="text-pink-200/80 text-sm font-medium">Total</span>
-            </div>
-            <p className="text-3xl font-black text-pink-200">{stats.total}</p>
-          </div>
-        </div>
-
-        {/* Account Feed */}
+        {/* Accounts List */}
         <div
-          className="relative backdrop-blur-xl rounded-2xl overflow-hidden animate-fade-in-delay-4"
+          className="backdrop-blur-xl rounded-3xl overflow-hidden"
           style={{
-            background: "rgba(30, 30, 40, 0.4)",
+            background: "rgba(255, 200, 221, 0.03)",
             border: "1px solid rgba(255, 200, 221, 0.1)",
           }}
         >
-          <div
-            className="p-5"
-            style={{
-              borderBottom: "1px solid rgba(255, 200, 221, 0.1)",
-              background: "rgba(255, 200, 221, 0.03)",
-            }}
-          >
-            <h2 className="text-xl font-bold text-pink-200">Generated Accounts</h2>
+          <div className="p-6" style={{ borderBottom: "1px solid rgba(255, 200, 221, 0.1)" }}>
+            <h2
+              className="text-2xl font-bold"
+              style={{
+                background: "linear-gradient(135deg, #ffc8dd 0%, #e6d5f5 100%)",
+                WebkitBackgroundClip: "text",
+                WebkitTextFillColor: "transparent",
+              }}
+            >
+              Generated Accounts
+            </h2>
           </div>
 
-          <div className="max-h-96 overflow-y-auto custom-scrollbar">
+          <div className="max-h-96 overflow-y-auto">
             {accounts.length === 0 ? (
-              <div className="p-10 text-center text-pink-200/40">
-                <Gem className="mx-auto mb-3 opacity-30" size={40} />
-                <p>No accounts generated yet</p>
-                <p className="text-sm mt-1">
-                  {isConnected ? "Click Generate Account to start" : "Connect Flask backend first"}
-                </p>
+              <div className="p-12 text-center">
+                <Gem className="mx-auto text-pink-200/20 mb-4" size={48} />
+                <p className="text-pink-200/40">No accounts generated yet</p>
               </div>
             ) : (
-              accounts.map((account, index) => (
+              accounts.map((account, i) => (
                 <div
-                  key={`${account.email}-${index}`}
-                  className="p-4 transition-all duration-300 hover:bg-pink-200/5"
-                  style={{ borderBottom: "1px solid rgba(255, 200, 221, 0.05)" }}
+                  key={account.id}
+                  className="p-6 transition-all duration-300 hover:bg-white/[0.02] group"
+                  style={{
+                    borderBottom: i < accounts.length - 1 ? "1px solid rgba(255, 200, 221, 0.05)" : "none",
+                  }}
                 >
                   <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      {account.status === "success" ? (
-                        <CheckCircle className="text-emerald-400" size={18} />
-                      ) : (
-                        <XCircle className="text-rose-400" size={18} />
-                      )}
+                    <div className="flex items-center gap-4">
+                      <div
+                        className="w-3 h-3 rounded-full"
+                        style={{
+                          background:
+                            account.status === "active"
+                              ? "#4ade80"
+                              : account.status === "inactive"
+                                ? "#f87171"
+                                : "#fbbf24",
+                          boxShadow:
+                            account.status === "active"
+                              ? "0 0 12px #4ade80"
+                              : account.status === "inactive"
+                                ? "0 0 12px #f87171"
+                                : "0 0 12px #fbbf24",
+                        }}
+                      />
                       <div>
                         <p className="text-pink-200 font-medium">{account.email}</p>
-                        <p className="text-pink-200/40 text-xs">
-                          {account.status === "success" ? (
-                            <>
-                              {account.gems} gems • {account.timestamp}
-                            </>
-                          ) : (
-                            <span className="text-rose-400/60">{account.error}</span>
-                          )}
-                        </p>
+                        <p className="text-pink-200/40 text-sm font-mono">{account.password}</p>
                       </div>
                     </div>
-                    {account.status === "success" && account.gems && (
-                      <div className="flex items-center gap-1 text-pink-200/60">
-                        <Gem size={14} />
-                        <span className="text-sm font-bold">{account.gems}</span>
+                    <div className="flex items-center gap-6">
+                      <div className="flex items-center gap-2">
+                        <Gem className="text-pink-200/70" size={18} />
+                        <span className="text-pink-200 font-bold">{account.balance}</span>
                       </div>
-                    )}
+                      <span className="text-pink-200/30 text-sm">
+                        {new Date(account.createdAt).toLocaleTimeString()}
+                      </span>
+                    </div>
                   </div>
                 </div>
               ))
@@ -1388,32 +1275,50 @@ export default function GemDashboard() {
         </div>
       </div>
 
-      <style jsx>{`
-        @keyframes slide-in {
-          from {
-            opacity: 0;
-            transform: translateY(20px);
-          }
-          to {
-            opacity: 1;
-            transform: translateY(0);
-          }
-        }
+      {/* Settings Modal */}
+      <HoneyModal
+        isOpen={showSettings}
+        onClose={() => setShowSettings(false)}
+        title="Settings"
+        icon={<Settings className="text-pink-200" size={24} />}
+      >
+        <div className="space-y-6">
+          <WaveInput
+            label="Session Token"
+            value={sessionToken}
+            onChange={setSessionToken}
+            placeholder="Enter your session token..."
+            hint="Used for balance checking and API authentication"
+          />
 
+          <div className="pt-4">
+            <LiquidButton onClick={saveSettings}>Save Settings</LiquidButton>
+          </div>
+        </div>
+      </HoneyModal>
+
+      <style jsx global>{`
         @keyframes gem-rise {
           0% {
             opacity: 0;
-            transform: translate(-50%, -50%) scale(0.8);
+            transform: translate(-50%, -50%) scale(0.5);
           }
           20% {
             opacity: 1;
+            transform: translate(-50%, -50%) scale(1.2);
+          }
+          80% {
+            opacity: 1;
+            transform: translate(-50%, calc(-50% - 100px)) scale(1);
           }
           100% {
             opacity: 0;
-            transform: translate(-50%, -200%) scale(1);
+            transform: translate(-50%, calc(-50% - 150px)) scale(0.8);
           }
         }
-
+        .animate-gem-rise {
+          animation: gem-rise 3s ease-out forwards;
+        }
         @keyframes fade-in {
           from {
             opacity: 0;
@@ -1424,69 +1329,8 @@ export default function GemDashboard() {
             transform: translateY(0);
           }
         }
-
-        /* Modal-specific keyframes */
-        @keyframes ripple-expand {
-          0% {
-            width: 0;
-            height: 0;
-            opacity: 1;
-          }
-          100% {
-            width: 400px;
-            height: 400px;
-            opacity: 0;
-          }
-        }
-        @keyframes liquid-border-flow {
-          0% { transform: translateX(-100%) rotate(0deg); }
-          100% { transform: translateX(200%) rotate(5deg); }
-        }
-        @keyframes shimmer-sweep {
-          0%, 100% { transform: translateX(-100%); }
-          50% { transform: translateX(100%); }
-        }
-
-
-        .animate-slide-in {
-          animation: slide-in 0.8s cubic-bezier(0.34, 1.56, 0.64, 1);
-        }
-
-        .animate-gem-rise {
-          animation: gem-rise 3s ease-out forwards;
-        }
-
         .animate-fade-in {
-          animation: fade-in 1s ease-out;
-        }
-
-        .animate-fade-in-delay-2 {
-          animation: fade-in 1s ease-out 0.4s backwards;
-        }
-
-        .animate-fade-in-delay-3 {
-          animation: fade-in 1s ease-out 0.6s backwards;
-        }
-
-        .animate-fade-in-delay-4 {
-          animation: fade-in 1s ease-out 0.8s backwards;
-        }
-
-        .custom-scrollbar::-webkit-scrollbar {
-          width: 6px;
-        }
-
-        .custom-scrollbar::-webkit-scrollbar-track {
-          background: rgba(255, 200, 221, 0.02);
-        }
-
-        .custom-scrollbar::-webkit-scrollbar-thumb {
-          background: rgba(255, 200, 221, 0.2);
-          border-radius: 10px;
-        }
-
-        .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-          background: rgba(255, 200, 221, 0.3);
+          animation: fade-in 0.5s ease-out forwards;
         }
       `}</style>
     </div>
